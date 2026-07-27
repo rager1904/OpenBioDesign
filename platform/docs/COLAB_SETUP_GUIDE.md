@@ -30,36 +30,19 @@ Copy and paste each block into a separate cell, then run with Shift+Enter.
 ```python
 !pip install fastapi uvicorn sqlalchemy pydantic pydantic-settings python-multipart httpx numpy
 !pip install transformers torch --quiet
+!pip install localtunnel
 !apt-get update -qq && apt-get install -y nodejs npm -qq
 print("Dependencies installed!")
 ```
 
-### Cell 2: Download Project
+### Cell 2: Clone Repository
 ```python
 import os
 
-# Option A: If you have the project as a zip, upload it
-# from google.colab import files
-# uploaded = files.upload()
-# !unzip *.zip -o
+!git clone https://github.com/rager1904/OpenBioDesign.git /content/OpenBioDesign 2>/dev/null || echo 'Using existing repo'
 
-# Option B: Clone from git (replace with your repo URL)
-!git clone https://github.com/YOUR_USERNAME/openbiodesign.git /content/platform 2>/dev/null
-
-# If git fails, create minimal structure manually
-if not os.path.exists('/content/platform/backend'):
-    os.makedirs('/content/platform/backend/openbiodesign', exist_ok=True)
-    print("WARNING: Git clone failed. Upload your project as a zip file instead.")
-    print("Steps:")
-    print("1. Zip your 'platform' folder")
-    print("2. Uncomment lines 6-7 in this cell")
-    print("3. Re-run this cell")
-else:
-    print("Project downloaded!")
-
-os.chdir('/content/platform/backend')
+os.chdir('/content/OpenBioDesign/platform/backend')
 print(f"Working directory: {os.getcwd()}")
-!ls -la
 ```
 
 ### Cell 3: Load ESM2 Model (~3GB VRAM)
@@ -102,13 +85,12 @@ except Exception as e:
     esmfold_model = esmfold_model.to(device).eval()
     print("ESMFold loaded from esm package!")
 
-# Report VRAM usage
 if torch.cuda.is_available():
     allocated = torch.cuda.memory_allocated() / 1e9
     print(f"VRAM Used: {allocated:.1f} GB")
 ```
 
-### Cell 5: Patch Models & Start Server
+### Cell 5: Patch Models & Start Backend
 ```python
 import sys
 import subprocess
@@ -142,11 +124,10 @@ class PatchedESMFold(ESMFoldClient):
 ESMFoldClient._instance = PatchedESMFold()
 print("ESMFold client patched!")
 
-# Kill any existing server
+# Start backend
 !pkill -f uvicorn 2>/dev/null
 time.sleep(1)
 
-# Start backend server
 server = subprocess.Popen(
     ['python', '-m', 'uvicorn', 'openbiodesign.main:app',
      '--host', '0.0.0.0', '--port', '8080'],
@@ -154,17 +135,122 @@ server = subprocess.Popen(
     stderr=subprocess.PIPE
 )
 
-# Wait for server to start
-print("Starting server...")
 time.sleep(5)
 
-# Test health endpoint
 import httpx
 try:
     r = httpx.get('http://localhost:8080/api/v1/health', timeout=10)
     print(f"Server OK: {r.json()}")
 except Exception as e:
     print(f"Server check failed: {e}")
+```
+
+### Cell 6: Expose Backend & Build Frontend
+```python
+import subprocess
+import time
+import os
+
+# Create backend tunnel
+print("Creating backend tunnel...")
+backend_tunnel = subprocess.Popen(
+    ['npx', 'localtunnel', '--port', '8080'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True
+)
+
+time.sleep(5)
+
+backend_url = ''
+if backend_tunnel.stdout:
+    for _ in range(10):
+        line = backend_tunnel.stdout.readline()
+        if 'loca.lt' in line or 'https' in line:
+            backend_url = line.strip()
+            break
+        time.sleep(0.5)
+
+if not backend_url:
+    backend_url = backend_tunnel.stdout.readline().strip()
+
+print(f"Backend tunnel URL: {backend_url}")
+
+api_base = backend_url.rstrip('/') + '/api/v1'
+print(f"Frontend will call API at: {api_base}")
+
+# Build frontend with backend URL
+frontend_dir = '/content/OpenBioDesign/platform/frontend'
+os.chdir(frontend_dir)
+
+!npm install --silent 2>/dev/null
+
+env = os.environ.copy()
+env['NEXT_PUBLIC_API_BASE_URL'] = api_base
+
+print("\nBuilding frontend...")
+build_result = subprocess.run(
+    ['npm', 'run', 'build'],
+    env=env,
+    capture_output=True,
+    text=True
+)
+
+if build_result.returncode != 0:
+    print(f"Build warning: {build_result.stderr[:500]}")
+else:
+    print("Frontend built successfully!")
+```
+
+### Cell 7: Start Frontend & Create Tunnel
+```python
+env = os.environ.copy()
+env['NEXT_PUBLIC_API_BASE_URL'] = api_base
+
+frontend_server = subprocess.Popen(
+    ['npx', 'next', 'start', '-H', '0.0.0.0', '-p', '3000'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    env=env
+)
+time.sleep(3)
+
+print("Creating frontend tunnel...")
+frontend_tunnel = subprocess.Popen(
+    ['npx', 'localtunnel', '--port', '3000'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True
+)
+
+time.sleep(5)
+
+frontend_url = ''
+if frontend_tunnel.stdout:
+    for _ in range(10):
+        line = frontend_tunnel.stdout.readline()
+        if 'loca.lt' in line or 'https' in line:
+            frontend_url = line.strip()
+            break
+        time.sleep(0.5)
+
+if not frontend_url:
+    frontend_url = frontend_tunnel.stdout.readline().strip()
+
+print()
+print("=" * 60)
+print("  OPENBIODESIGN - REMOTE ACCESS URLS")
+print("=" * 60)
+print()
+print(f"  Frontend UI:   {frontend_url}")
+print(f"  Backend API:   {backend_url}")
+print()
+print("  Open the Frontend URL on any device (phone, tablet, laptop).")
+print("  Share these URLs with collaborators.")
+print()
+print("  NOTE: On first visit, localtunnel shows a 'Click to Continue'")
+print("  page. Just click through it to proceed.")
+print("=" * 60)
 ```
 
 ---
@@ -269,8 +355,6 @@ print(f"  Good (70-90): {stats['good_pct']:.1f}%")
 print(f"  Low (50-70): {stats['low_pct']:.1f}%")
 print(f"  Very Low (<50): {stats['very_low_pct']:.1f}%")
 print()
-
-# Save PDB
 with open('predicted_structure.pdb', 'w') as f:
     f.write(structure['pdb_content'])
 print("PDB file saved: predicted_structure.pdb")
@@ -303,25 +387,6 @@ print(f"Confidence: {mutation['confidence']:.4f}")
 print("STATUS: PASS" if mutation['effect_classification'] in ['stabilizing', 'destabilizing', 'neutral'] else "STATUS: FAIL")
 ```
 
-### Test 6: Full Analysis
-```python
-r = httpx.post(
-    'http://localhost:8080/api/v1/esm2/analyze-sequence',
-    json={"sequence": SEQUENCE, "top_k": 5},
-    timeout=60
-)
-
-analysis = r.json()
-print("FULL SEQUENCE ANALYSIS")
-print("=" * 40)
-print(f"Sequence Length: {analysis['sequence_length']}")
-print(f"Score: {analysis['sequence_score']['mean_log_likelihood']:.4f}")
-print(f"Interpretation: {analysis['sequence_score']['interpretation']}")
-print(f"Binding Site: {analysis['binding_sites']['residue_positions_1indexed']}")
-print(f"Binding Confidence: {analysis['binding_sites']['confidence']:.4f}")
-print("STATUS: PASS")
-```
-
 ---
 
 ## Step 5: View API Documentation
@@ -336,29 +401,10 @@ This shows all available endpoints with interactive testing.
 
 ---
 
-## Step 6: Build Frontend (Optional)
-
-```python
-import os
-
-frontend_dir = '/content/platform/frontend'
-if os.path.exists(frontend_dir):
-    os.chdir(frontend_dir)
-    !npm install --silent 2>/dev/null
-    !npm run build
-    print("Frontend built!")
-    print("Run: !npx serve -s .next -l 3000")
-else:
-    print("Frontend directory not found - skip this step")
-```
-
----
-
 ## Troubleshooting
 
 ### Problem: GPU Out of Memory
 ```python
-# Restart runtime and only run cells 3+4 (skip if not needed)
 import torch
 torch.cuda.empty_cache()
 print(f"VRAM freed: {torch.cuda.memory_allocated()/1e9:.1f} GB allocated")
@@ -366,32 +412,20 @@ print(f"VRAM freed: {torch.cuda.memory_allocated()/1e9:.1f} GB allocated")
 
 ### Problem: Server Won't Start
 ```python
-# Check logs
 !ps aux | grep uvicorn
 !netstat -tlnp | grep 8080
 ```
 
-### Problem: Import Errors
+### Problem: Tunnel URL Not Appearing
 ```python
-# Verify you're in the right directory
-import os
-os.chdir('/content/platform/backend')
-print(os.getcwd())
-!ls openbiodesign/
+# Re-check tunnel processes
+!ps aux | grep localtunnel
+# If dead, restart from Cell 6
 ```
 
----
-
-## Expected Results
-
-| Test | What It Proves |
-|------|----------------|
-| Binding Sites | ESM2 attention maps work |
-| Sequence Scoring | Log-likelihood computation works |
-| Binder Design | End-to-end ML workflow works |
-| Structure Prediction | ESMFold inference works |
-| Mutation Analysis | Zero-shot effect prediction works |
-| Full Analysis | All components integrate correctly |
+### Problem: Frontend Can't Reach Backend
+- Verify the frontend was built with the correct `NEXT_PUBLIC_API_BASE_URL`
+- Re-run Cell 6 to rebuild with the correct backend tunnel URL
 
 ---
 
@@ -415,20 +449,10 @@ print(os.getcwd())
 
 ---
 
-## Next Steps
+## Remote Access Notes
 
-1. Try different protein sequences
-2. Explore the API at `/docs`
-3. Test mutation positions
-4. Compare with known structures
-5. Export results for further analysis
-
----
-
-## Support
-
-If you encounter issues:
-1. Check the Troubleshooting section
-2. Verify GPU is enabled (Runtime → Change runtime type)
-3. Restart runtime and run cells in order
-4. Check `!nvidia-smi` for GPU status
+- Both services are exposed via **localtunnel** public URLs
+- The frontend automatically calls the backend via its tunnel URL
+- On first visit to a tunnel URL, you'll see a "Click to Continue" page - just click through
+- Tunnel URLs change each time you restart the notebook
+- Share the frontend URL with collaborators for demos
