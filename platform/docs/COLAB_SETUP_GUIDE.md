@@ -46,6 +46,9 @@ import os, time
 !pip install -q omegaconf pytorch_lightning biopython ml_collections einops modelcif
 !pip install -q git+https://github.com/NVIDIA/dllogger.git
 !pip install -q git+https://github.com/sokrypton/openfold.git
+
+# Remove any conflicting esm package BEFORE installing sokrypton fork
+!pip uninstall -y esm fair-esm 2>/dev/null; echo 'done'
 !pip install -q git+https://github.com/sokrypton/esm.git
 
 print('All dependencies installed!')
@@ -103,7 +106,14 @@ if not os.path.isfile(model_name):
 else:
     print('ESMFold weights already cached')
 
-import esm, torch
+import sys, torch, esm
+
+# Ensure esm.Alphabet exists for torch.load unpickling
+if not hasattr(esm, 'Alphabet'):
+    from esm.data import Alphabet
+    esm.Alphabet = Alphabet
+    sys.modules['esm'].Alphabet = Alphabet
+    print('Patched esm.Alphabet from esm.data')
 
 print('Loading ESMFold model...')
 esmfold_model = torch.load(model_name, weights_only=False)
