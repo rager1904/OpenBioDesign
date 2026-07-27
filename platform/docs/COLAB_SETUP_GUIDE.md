@@ -69,21 +69,12 @@ print("ESM2 loaded successfully!")
 ```python
 print("Loading ESMFold...")
 
-try:
-    from transformers import AutoModelForProteinFolding
-    esmfold_model = AutoModelForProteinFolding.from_pretrained(
-        "facebook/esmfold_v1",
-        trust_remote_code=True
-    ).to(device).eval()
-    print("ESMFold loaded from transformers!")
-except Exception as e:
-    print(f"Transformers failed: {e}")
-    print("Trying esm package...")
-    !pip install esm --quiet
-    import esm
-    esmfold_model, _ = esm.pretrained.esmfold_v1()
-    esmfold_model = esmfold_model.to(device).eval()
-    print("ESMFold loaded from esm package!")
+!pip install fair-esm --quiet
+import esm
+
+esmfold_model, _ = esm.pretrained.esmfold_v1()
+esmfold_model = esmfold_model.to(device).eval()
+print("ESMFold loaded successfully!")
 
 if torch.cuda.is_available():
     allocated = torch.cuda.memory_allocated() / 1e9

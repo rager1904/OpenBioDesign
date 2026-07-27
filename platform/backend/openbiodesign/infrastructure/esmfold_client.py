@@ -99,8 +99,8 @@ class ESMFoldClient:
             except ImportError as e2:
                 logger.error("Could not load ESMFold: %s", e2)
                 raise RuntimeError(
-                    "ESMFold requires either transformers>=4.35 or esm package. "
-                    "Install with: pip install transformers torch"
+                    "ESMFold requires the fair-esm package. "
+                    "Install with: pip install fair-esm"
                 ) from e2
 
     def _ensure_loaded(self) -> None:
