@@ -39,8 +39,8 @@ import os, time
 # Node.js for frontend
 !apt-get update -qq && apt-get install -y -qq nodejs npm > /dev/null 2>&1
 
-# localtunnel for remote access
-!pip install -q localtunnel
+# localtunnel for remote access (npm package, not pip)
+!npm install -g localtunnel
 
 # ESMFold deps (from ColabFold - proven to work on Colab)
 !pip install -q omegaconf pytorch_lightning biopython ml_collections einops modelcif
