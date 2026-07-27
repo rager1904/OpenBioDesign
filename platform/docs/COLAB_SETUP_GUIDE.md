@@ -182,26 +182,27 @@ except Exception as e:
 ```python
 import subprocess, time, os
 
-# Backend tunnel
-print('Creating backend tunnel...')
+import re
+
+# Backend tunnel via Cloudflare
+print('Creating backend tunnel via Cloudflare...')
 backend_tunnel = subprocess.Popen(
-    ['npx', 'localtunnel', '--port', '8000'],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ['cloudflared', 'tunnel', '--url', 'http://localhost:8000'],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
 )
-time.sleep(5)
 
 backend_url = ''
-for _ in range(20):
+for _ in range(30):
     line = backend_tunnel.stdout.readline()
-    if 'loca.lt' in line or 'https' in line:
-        backend_url = line.strip()
+    if not line:
+        time.sleep(1)
+        continue
+    match = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', line)
+    if match:
+        backend_url = match.group(0)
         break
-    time.sleep(0.5)
 
-if not backend_url:
-    backend_url = backend_tunnel.stdout.readline().strip()
-
-api_base = backend_url.rstrip('/') + '/api/v1'
+api_base = backend_url + '/api/v1'
 print(f'Backend URL: {backend_url}')
 
 # Build frontend
