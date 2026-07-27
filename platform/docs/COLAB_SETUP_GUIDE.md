@@ -36,8 +36,9 @@ import os, time
 !pip install -q fastapi uvicorn sqlalchemy pydantic pydantic-settings python-multipart httpx numpy scipy
 !pip install -q transformers torch
 
-# Node.js for frontend
-!apt-get update -qq && apt-get install -y -qq nodejs npm > /dev/null 2>&1
+# Node.js 18 for frontend (apt-get gives ancient v12)
+!curl -fsSL https://deb.nodesource.com/setup_18.x | bash - > /dev/null 2>&1 && apt-get install -y -qq nodejs > /dev/null 2>&1
+!node --version
 
 # localtunnel for remote access (npm package, not pip)
 !npm install -g localtunnel
@@ -83,7 +84,7 @@ ESM2_MODEL = 'facebook/esm2_t33_650M_UR50D'
 print(f'Loading {ESM2_MODEL}...')
 
 tokenizer = AutoTokenizer.from_pretrained(ESM2_MODEL)
-esm2_model = AutoModelForMaskedLM.from_pretrained(ESM2_MODEL).to(device).eval()
+esm2_model = AutoModelForMaskedLM.from_pretrained(ESM2_MODEL, attn_implementation='eager').to(device).eval()
 
 params = sum(p.numel() for p in esm2_model.parameters()) / 1e6
 print(f'ESM2 loaded! ({params:.0f}M params on {device})')
