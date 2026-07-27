@@ -160,14 +160,14 @@ time.sleep(1)
 
 server = subprocess.Popen(
     ['python', '-m', 'uvicorn', 'openbiodesign.main:app',
-     '--host', '0.0.0.0', '--port', '8080'],
+     '--host', '0.0.0.0', '--port', '8000'],
     stdout=subprocess.PIPE, stderr=subprocess.PIPE
 )
 time.sleep(5)
 
 import httpx
 try:
-    r = httpx.get('http://localhost:8080/api/v1/health', timeout=10)
+    r = httpx.get('http://localhost:8000/api/v1/health', timeout=10)
     print(f'Backend running! Health: {r.json()}')
 except Exception as e:
     print(f'Backend check failed: {e}')
@@ -180,7 +180,7 @@ import subprocess, time, os
 # Backend tunnel
 print('Creating backend tunnel...')
 backend_tunnel = subprocess.Popen(
-    ['npx', 'localtunnel', '--port', '8080'],
+    ['npx', 'localtunnel', '--port', '8000'],
     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
 )
 time.sleep(5)
@@ -209,7 +209,7 @@ env = os.environ.copy()
 env['NEXT_PUBLIC_API_BASE_URL'] = api_base
 
 print('Building frontend...')
-result = subprocess.run(['npm', 'run', 'build'], env=env, capture_output=True, text=True)
+result = subprocess.run(['npx', 'next', 'build'], env=env, capture_output=True, text=True, cwd=frontend_dir)
 print('Frontend built!' if result.returncode == 0 else f'Build issues: {result.stderr[:300]}')
 ```
 
@@ -222,7 +222,8 @@ env['NEXT_PUBLIC_API_BASE_URL'] = api_base
 
 frontend_server = subprocess.Popen(
     ['npx', 'next', 'start', '-H', '0.0.0.0', '-p', '3000'],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    cwd='/content/OpenBioDesign/platform/frontend'
 )
 time.sleep(3)
 
@@ -266,7 +267,7 @@ import httpx
 
 SEQUENCE = "MRPSGTAGAALLALLAALCPASRALEEKKVCQGTSNKLTQLGTFEDHFLSLQRMFNNCEVVLGNLEITYVQRNYDLSFLKTIQEVAGYVLIALNTVERIPLENLQIIR"
 
-r = httpx.post('http://localhost:8080/api/v1/esm2/detect-binding-sites',
+r = httpx.post('http://localhost:8000/api/v1/esm2/detect-binding-sites',
     json={"sequence": SEQUENCE, "top_k": 8}, timeout=60)
 result = r.json()
 print(f"Residues: {result['residue_positions_1indexed']}")
@@ -275,7 +276,7 @@ print(f"Confidence: {result['confidence']:.4f}")
 
 ### Structure Prediction
 ```python
-r = httpx.post('http://localhost:8080/api/v1/esmfold/predict',
+r = httpx.post('http://localhost:8000/api/v1/esmfold/predict',
     json={"sequence": SEQUENCE[:100]}, timeout=120)
 s = r.json()
 print(f"pLDDT: {s['mean_plddt']:.2f}")
@@ -284,7 +285,7 @@ print(f"Confidence: {s['confidence_classification']}")
 
 ### Mutation Analysis
 ```python
-r = httpx.post('http://localhost:8080/api/v1/esm2/predict-mutation',
+r = httpx.post('http://localhost:8000/api/v1/esm2/predict-mutation',
     json={"sequence": SEQUENCE[:50], "position": 10, "mutant_residue": "D"}, timeout=60)
 m = r.json()
 print(f"Effect: {m['effect_classification']} (delta: {m['delta_score']:.4f})")
