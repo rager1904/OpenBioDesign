@@ -1,0 +1,93 @@
+# Default values for boltz2-nim-chart.
+
+replicaCount: 1
+
+boltz2:
+  containerName: boltz2
+  containerPort: 8000
+  repository: nvcr.io/nvstaging/nim/boltz2
+  tag: "1.6.0-47330737"
+  pullPolicy: Always
+  cacheFolder: /opt/nim/.cache
+  servicePort: 8081
+  structureOptimizedBackend: "trt"
+  affinityOptimizedBackend: "trt"
+  enableDiffusionTF32: "1"
+
+imagePullSecret:
+  registry: "nvcr.io"
+  name: "ngc-secret-boltz2"
+  create: true
+  username: '$oauthtoken'
+  secretName: ngc-registry-secret
+  secretKey: NGC_REGISTRY_KEY
+
+service:
+  type: ClusterIP
+
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+  requests:
+    nvidia.com/gpu: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: standard
+  accessMode: ReadWriteOnce
+  hostPath: /data/nim
+  size: 10Gi
+  fixPermissions: true
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+probes:
+  liveness:
+    initialDelaySeconds: 300
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 300
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
