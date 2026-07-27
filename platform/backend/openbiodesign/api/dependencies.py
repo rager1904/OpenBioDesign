@@ -29,7 +29,6 @@ from openbiodesign.infrastructure.jobs import (
     LocalWorkflowJobService,
     SqlJobRepository,
 )
-from openbiodesign.infrastructure.neo4j_graph import Neo4jKnowledgeGraph
 from openbiodesign.infrastructure.repositories import (
     ExperimentRepository,
     IdentityRepository,
@@ -64,6 +63,7 @@ def get_repository_pair() -> tuple[ExperimentRepository, KnowledgeGraph]:
     elif settings.knowledge_graph_backend == "neo4j":
         if not settings.neo4j_uri or not settings.neo4j_user or not settings.neo4j_password:
             raise ValueError("Neo4j backend requires uri, user, and password settings.")
+        from openbiodesign.infrastructure.neo4j_graph import Neo4jKnowledgeGraph
         knowledge_graph = Neo4jKnowledgeGraph(
             settings.neo4j_uri,
             settings.neo4j_user,

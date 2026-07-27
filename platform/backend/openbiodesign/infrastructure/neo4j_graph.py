@@ -1,8 +1,6 @@
 from typing import Any
 from uuid import UUID
 
-from neo4j import GraphDatabase
-
 from openbiodesign.infrastructure.repositories import KnowledgeGraph
 
 
@@ -14,6 +12,7 @@ class Neo4jKnowledgeGraph(KnowledgeGraph):
         password: str,
         driver: Any | None = None,
     ) -> None:
+        from neo4j import GraphDatabase
         self.driver = driver or GraphDatabase.driver(uri, auth=(user, password))
 
     def initialize_schema(self) -> None:

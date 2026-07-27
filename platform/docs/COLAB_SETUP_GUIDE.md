@@ -128,7 +128,7 @@ else:
 
 ### Cell 5: Start Backend Server
 ```python
-import sys, os, subprocess, time
+import sys, os, threading, time
 
 sys.path.insert(0, os.getcwd())
 
@@ -155,15 +155,16 @@ class PatchedESMFold(ESMFoldClient):
 ESMFoldClient._instance = PatchedESMFold()
 print('ESMFold client patched')
 
-!pkill -f uvicorn 2>/dev/null || true
-time.sleep(1)
+# Start FastAPI server in SAME process so singleton patches work
+import uvicorn
+from openbiodesign.main import app
 
-server = subprocess.Popen(
-    ['python', '-m', 'uvicorn', 'openbiodesign.main:app',
-     '--host', '0.0.0.0', '--port', '8000'],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-)
-time.sleep(5)
+def run_server():
+    uvicorn.run(app, host='0.0.0.0', port=8000, log_level='warning')
+
+server_thread = threading.Thread(target=run_server, daemon=True)
+server_thread.start()
+time.sleep(3)
 
 import httpx
 try:
@@ -203,14 +204,14 @@ print(f'Backend URL: {backend_url}')
 frontend_dir = '/content/OpenBioDesign/platform/frontend'
 os.chdir(frontend_dir)
 
-!npm install --silent 2>/dev/null
+!npm install
 
 env = os.environ.copy()
 env['NEXT_PUBLIC_API_BASE_URL'] = api_base
 
 print('Building frontend...')
-result = subprocess.run(['npx', 'next', 'build'], env=env, capture_output=True, text=True, cwd=frontend_dir)
-print('Frontend built!' if result.returncode == 0 else f'Build issues: {result.stderr[:300]}')
+result = subprocess.run(['npm', 'run', 'build'], env=env, capture_output=True, text=True, cwd=frontend_dir)
+print('Frontend built!' if result.returncode == 0 else f'Build issues: {result.stderr[:500]}')
 ```
 
 ### Cell 7: Start Frontend & Create Tunnel
