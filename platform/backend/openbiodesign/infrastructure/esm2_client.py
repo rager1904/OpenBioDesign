@@ -101,13 +101,13 @@ class ESM2Client:
         if self._model_loaded:
             return
 
-        from transformers import ESM2ForMaskedLM, ESM2Tokenizer
+        from transformers import AutoModelForMaskedLM, AutoTokenizer
 
         logger.info("Loading ESM2 model: %s", model_name)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer = ESM2Tokenizer.from_pretrained(model_name)
-        self.model = ESM2ForMaskedLM.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name)
         self.model.to(self.device)
         self.model.eval()
         self._model_loaded = True

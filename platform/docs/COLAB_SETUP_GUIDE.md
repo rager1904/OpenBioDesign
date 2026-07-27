@@ -54,14 +54,14 @@ if torch.cuda.is_available():
     print(f"GPU Name: {torch.cuda.get_device_name(0)}")
     print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
-from transformers import ESM2ForMaskedLM, ESM2Tokenizer
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
 
 print(f"Loading {MODEL_NAME}...")
-tokenizer = ESM2Tokenizer.from_pretrained(MODEL_NAME)
-esm2_model = ESM2ForMaskedLM.from_pretrained(MODEL_NAME).to(device).eval()
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+esm2_model = AutoModelForMaskedLM.from_pretrained(MODEL_NAME).to(device).eval()
 print("ESM2 loaded successfully!")
 ```
 
