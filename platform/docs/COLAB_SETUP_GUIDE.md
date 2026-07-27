@@ -43,6 +43,9 @@ import os, time
 # localtunnel for remote access (npm package, not pip)
 !npm install -g localtunnel
 
+# cloudflared for reliable frontend tunnel (no warning page)
+!wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
+
 # ESMFold deps (from ColabFold - proven to work on Colab)
 !pip install -q omegaconf pytorch_lightning biopython ml_collections einops modelcif
 !pip install -q git+https://github.com/NVIDIA/dllogger.git
@@ -227,25 +230,36 @@ frontend_server = subprocess.Popen(
     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
     cwd='/content/OpenBioDesign/platform/frontend'
 )
-time.sleep(3)
 
-print('Creating frontend tunnel...')
+# Wait for Next.js to be ready
+import httpx as _httpx
+for i in range(20):
+    time.sleep(1)
+    try:
+        _httpx.get('http://localhost:3000', timeout=2)
+        print(f'Frontend ready after {i+1}s')
+        break
+    except Exception:
+        if i == 19:
+            print('Frontend may still be starting...')
+
+# Create frontend tunnel via Cloudflare (no warning page)
+print('Creating frontend tunnel via Cloudflare...')
 frontend_tunnel = subprocess.Popen(
-    ['npx', 'localtunnel', '--port', '3000'],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ['cloudflared', 'tunnel', '--url', 'http://localhost:3000'],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
 )
-time.sleep(5)
 
 frontend_url = ''
-for _ in range(20):
+for _ in range(30):
     line = frontend_tunnel.stdout.readline()
-    if 'loca.lt' in line or 'https' in line:
-        frontend_url = line.strip()
+    if 'trycloudflare.com' in line:
+        for part in line.split():
+            if 'trycloudflare.com' in part:
+                frontend_url = part
+                break
         break
-    time.sleep(0.5)
-
-if not frontend_url:
-    frontend_url = frontend_tunnel.stdout.readline().strip()
+    time.sleep(1)
 
 print()
 print('=' * 60)
@@ -255,7 +269,7 @@ print(f'  Frontend: {frontend_url}')
 print(f'  Backend:  {backend_url}')
 print()
 print('  Open the Frontend URL on any device.')
-print('  First visit: click through the localtunnel warning page.')
+print('  No warning page - opens directly.')
 print('=' * 60)
 ```
 
