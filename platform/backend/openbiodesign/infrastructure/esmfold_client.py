@@ -7,6 +7,11 @@ Provides:
 
 Model: facebook/esmfold_v1 (~690M params, ~1-2GB VRAM)
 Optimal sequence length: Up to 512 residues
+
+Loading priority:
+  1. transformers AutoModelForProteinFolding
+  2. fair-esm (Python <=3.9)
+  3. sokrypton/esm fork + torch.load (works on Colab Python 3.12)
 """
 
 from __future__ import annotations
@@ -88,7 +93,7 @@ class ESMFoldClient:
         except (ImportError, Exception) as e:
             logger.warning("Could not load from transformers: %s", e)
             try:
-                # Fallback: try direct esm package
+                # Fallback: try direct esm package (fair-esm, requires Python <=3.9)
                 import esm
 
                 self.model, _ = esm.pretrained.esmfold_v1()
@@ -96,12 +101,28 @@ class ESMFoldClient:
                 self.model.eval()
                 self._model_loaded = True
                 logger.info("ESMFold loaded from esm package")
-            except ImportError as e2:
-                logger.error("Could not load ESMFold: %s", e2)
-                raise RuntimeError(
-                    "ESMFold requires the fair-esm package. "
-                    "Install with: pip install fair-esm"
-                ) from e2
+            except (ImportError, Exception) as e2:
+                logger.warning("Could not load from fair-esm: %s", e2)
+                try:
+                    # Second fallback: sokrypton fork (works on Python 3.12)
+                    # pip install git+https://github.com/sokrypton/esm.git
+                    import esm as sokrypton_esm
+
+                    self.model = torch.load(
+                        "esmfold.model", weights_only=False
+                    )
+                    self.model = self.model.to(self.device)
+                    self.model.eval()
+                    self._model_loaded = True
+                    logger.info("ESMFold loaded via torch.load (sokrypton fork)")
+                except Exception as e3:
+                    logger.error("Could not load ESMFold: %s", e3)
+                    raise RuntimeError(
+                        "ESMFold requires either:\n"
+                        "  1. transformers with AutoModelForProteinFolding (pip install transformers>=4.40)\n"
+                        "  2. fair-esm (pip install fair-esm, Python <=3.9)\n"
+                        "  3. sokrypton/esm fork + weights file (pip install git+https://github.com/sokrypton/esm.git, download esmfold.model)"
+                    ) from e3
 
     def _ensure_loaded(self) -> None:
         if not self._model_loaded:
