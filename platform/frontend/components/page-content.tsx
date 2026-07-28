@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { StatusBadge } from "@/components/status";
-import { ScientificTrendChart } from "@/components/charts";
+import { ScientificTrendChart, PlddtChart } from "@/components/charts";
 import dynamic from "next/dynamic";
 
 const MolecularViewer = dynamic(() => import("@/components/molecular-viewer").then((m) => m.MolecularViewer), {
@@ -32,7 +32,7 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { WorkflowSubmissionForm } from "@/components/workflow-submission-form";
 import { InteractionDiagram, generateInteractions } from "@/components/docking-visualization";
 import { DockingInteractionDiagram } from "@/components/docking-2d-diagram";
-import { runDocking, lookupTarget, searchLiterature, getReport } from "@/lib/api";
+import { runDocking, lookupTarget, searchLiterature, getReport, chatWithAiScientist, detectBindingSites, scoreSequence } from "@/lib/api";
 import type { PageKey, Metric, Candidate, ResearchActivity } from "@/lib/types";
 import { formatPercent } from "@/lib/utils";
 import { useAppStore } from "@/store/use-app-store";
@@ -201,10 +201,19 @@ function TargetAnalysisPage({ snapshot }: { snapshot?: Snapshot }) {
   const [literatureResults, setLiteratureResults] = useState<Array<{ id: string; title: string; url: string | null; source: string }>>([]);
   const [litLoading, setLitLoading] = useState(false);
 
+  const [bindingSites, setBindingSites] = useState<number[] | null>(null);
+  const [bindingConfidence, setBindingConfidence] = useState<number | null>(null);
+  const [bindingLoading, setBindingLoading] = useState(false);
+  const [seqScore, setSeqScore] = useState<{ mean: number; interpretation: string } | null>(null);
+  const [seqScoreLoading, setSeqScoreLoading] = useState(false);
+
   const handleTargetLookup = useCallback(async () => {
     if (!targetQuery.trim()) return;
     setTargetLoading(true);
     setTargetError(null);
+    setBindingSites(null);
+    setBindingConfidence(null);
+    setSeqScore(null);
     try {
       const result = await lookupTarget(targetQuery.trim());
       setTargetResult(result);
@@ -230,9 +239,37 @@ function TargetAnalysisPage({ snapshot }: { snapshot?: Snapshot }) {
     }
   }, [targetResult, targetQuery]);
 
+  const runEsm2Analysis = useCallback(async () => {
+    const seq = targetResult?.sequence;
+    if (!seq) return;
+    setBindingLoading(true);
+    setSeqScoreLoading(true);
+    try {
+      const [sites, score] = await Promise.all([
+        detectBindingSites(seq, 8),
+        scoreSequence(seq),
+      ]);
+      setBindingSites(sites.residue_positions_1indexed);
+      setBindingConfidence(sites.confidence);
+      setSeqScore({ mean: score.mean_log_likelihood, interpretation: score.interpretation });
+    } catch {
+      setBindingSites(null);
+      setSeqScore(null);
+    } finally {
+      setBindingLoading(false);
+      setSeqScoreLoading(false);
+    }
+  }, [targetResult]);
+
   useEffect(() => {
     handleTargetLookup();
   }, [handleTargetLookup]);
+
+  useEffect(() => {
+    if (targetResult?.sequence) {
+      runEsm2Analysis();
+    }
+  }, [targetResult?.sequence, runEsm2Analysis]);
 
   const sequence = (targetResult?.sequence as string) ?? "";
   const proteinName = (targetResult?.protein_name as string) ?? "";
@@ -283,37 +320,100 @@ function TargetAnalysisPage({ snapshot }: { snapshot?: Snapshot }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Protein Targets Studied</CardTitle>
-            <CardDescription>{experiments.length} experiments with real evidence from UniProt, PDB, and Europe PMC</CardDescription>
-          </div>
-          <Badge tone="emerald">{snapshot?.stats.total_experiments ?? 0} experiments</Badge>
-        </CardHeader>
-        <CardContent className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-          <div>
-            <h3 className="mb-3 text-sm font-semibold text-white">Sequence Viewer</h3>
-            <SequenceViewer sequence={sequence} />
-          </div>
-          <div className="flex flex-col gap-3">
-            {experiments.map((exp) => (
-              <div key={exp.experiment_id} className="rounded-lg border bg-slate-950/50 p-3">
-                <div className="mb-2 flex justify-between gap-3 text-sm">
-                  <span className="font-medium text-white">Experiment {exp.experiment_id.slice(0, 8)}</span>
-                  <span className="text-muted-foreground">Seed: {exp.random_seed}</span>
+      {sequence && (
+        <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Sequence Viewer</CardTitle>
+                  <CardDescription>Full protein sequence with ESM2-predicted binding site highlights</CardDescription>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {(exp.outputs?.candidate_count as number) ?? 0} candidates · {(exp.outputs?.binding_site_count as number) ?? 0} binding sites · {exp.status}
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Evidence: {((exp.outputs?.evidence_sources as string[]) ?? []).join(", ") || "UniProt, PDB, Europe PMC"}
-                </div>
+                <Badge tone="cyan">{sequence.length} residues</Badge>
               </div>
-            ))}
+            </CardHeader>
+            <CardContent>
+              <SequenceViewer sequence={sequence} bindingSites={bindingSites ?? undefined} />
+            </CardContent>
+          </Card>
+
+          <div className="flex flex-col gap-5">
+            <Card>
+              <CardHeader>
+                <CardTitle>ESM2 Analysis</CardTitle>
+                <CardDescription>ML-powered binding site detection and sequence fitness scoring</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-lg border bg-slate-950/50 p-4">
+                  <h3 className="text-sm font-semibold text-white">Binding Sites</h3>
+                  {bindingLoading ? (
+                    <p className="mt-2 text-xs text-muted-foreground animate-pulse">Running ESM2 attention analysis...</p>
+                  ) : bindingSites ? (
+                    <div className="mt-2">
+                      <div className="text-xs text-slate-300">
+                        {bindingSites.length} predicted binding residues (confidence: {(bindingConfidence ?? 0 * 100).toFixed(1)}%)
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {bindingSites.map((pos) => (
+                          <span key={pos} className="rounded bg-cyan-900/40 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300">
+                            {pos}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">No data</p>
+                  )}
+                </div>
+                <div className="rounded-lg border bg-slate-950/50 p-4">
+                  <h3 className="text-sm font-semibold text-white">Sequence Score</h3>
+                  {seqScoreLoading ? (
+                    <p className="mt-2 text-xs text-muted-foreground animate-pulse">Computing log-likelihood...</p>
+                  ) : seqScore ? (
+                    <div className="mt-2">
+                      <div className="text-lg font-bold text-cyan-300">{seqScore.mean.toFixed(3)} nats</div>
+                      <div className="text-xs text-slate-300">{seqScore.interpretation}</div>
+                      <div className="mt-1 text-[10px] text-muted-foreground">Higher (less negative) = more protein-like</div>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">No data</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Protein Targets Studied</CardTitle>
+                  <CardDescription>{experiments.length} experiments with real evidence</CardDescription>
+                </div>
+                <Badge tone="emerald">{experiments.length} experiments</Badge>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {experiments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No experiments yet. Submit a binder design workflow to start tracking.</p>
+                ) : (
+                  experiments.map((exp) => (
+                    <div key={exp.experiment_id} className="rounded-lg border bg-slate-950/50 p-3">
+                      <div className="mb-2 flex justify-between gap-3 text-sm">
+                        <span className="font-medium text-white">Experiment {exp.experiment_id.slice(0, 8)}</span>
+                        <span className="text-muted-foreground">Seed: {exp.random_seed}</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {(exp.outputs?.candidate_count as number) ?? 0} candidates · {(exp.outputs?.binding_site_count as number) ?? 0} binding sites · {exp.status}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Evidence: {((exp.outputs?.evidence_sources as string[]) ?? []).join(", ") || "UniProt, PDB, Europe PMC"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
       {literatureResults.length > 0 && (
         <Card>
@@ -343,8 +443,8 @@ function TargetAnalysisPage({ snapshot }: { snapshot?: Snapshot }) {
       )}
 
       <div className="grid gap-5 lg:grid-cols-3">
-        <InfoList title="Evidence Sources" items={["UniProt REST API", "RCSB PDB API", "AlphaFold DB API", "Europe PMC API"]} />
-        <InfoList title="Model Stack" items={["Source-backed Protein Analysis Agent", "Source-backed Literature Agent", "Deterministic Binder Generation Agent"]} />
+        <InfoList title="Evidence Sources" items={["UniProt REST API", "RCSB PDB API", "AlphaFold DB API", "Europe PMC API", "ESM2-650M attention maps"]} />
+        <InfoList title="Model Stack" items={["ESM2-650M Binding Site Agent", "ESM2 Sequence Fitness Scorer", "UniProt/PDB Evidence Agent", "Europe PMC Literature Agent"]} />
         <InfoList title="Data Sources" items={["PostgreSQL audit log", "Knowledge graph", "Artifact store"]} />
       </div>
     </div>
@@ -453,6 +553,12 @@ function StructurePredictionPage() {
                 <p className="text-xs text-slate-400">Classification: <span className="font-semibold text-white">{prediction.confidence_classification}</span></p>
                 <p className="text-xs text-slate-400">Method: {prediction.method}</p>
               </div>
+              {prediction.plddt_per_residue.length > 0 && (
+                <div className="rounded-lg border bg-slate-950/50 p-4">
+                  <h4 className="mb-2 text-xs font-semibold text-white">Per-Residue pLDDT Confidence</h4>
+                  <PlddtChart scores={prediction.plddt_per_residue} />
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -463,10 +569,66 @@ function StructurePredictionPage() {
 
 function BinderGenerationPage({ snapshot }: { snapshot?: Snapshot }) {
   const candidates = snapshot?.candidates ?? [];
+  const selectedCandidateId = useAppStore((state) => state.selectedCandidateId);
+  const selectedCandidate = candidates.find((c) => c.id === selectedCandidateId) ?? null;
+
   return (
     <div className="flex flex-col gap-5">
       <WorkflowSubmissionForm />
       <CandidateTable candidates={candidates} />
+
+      {selectedCandidate && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Candidate Detail</CardTitle>
+                <CardDescription>Full analysis for {selectedCandidate.id.slice(0, 24)}</CardDescription>
+              </div>
+              <Badge tone={selectedCandidate.risk === "low" ? "emerald" : "blue"}>{selectedCandidate.risk} risk</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Confidence</h4>
+              <p className="mt-1 text-lg font-bold text-cyan-300">{formatPercent(selectedCandidate.confidence)}</p>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-slate-800">
+                <div className="h-1.5 rounded-full bg-cyan-500" style={{ width: `${selectedCandidate.confidence * 100}%` }} />
+              </div>
+            </div>
+            <div className="rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Novelty</h4>
+              <p className="mt-1 text-lg font-bold text-emerald-300">{formatPercent(selectedCandidate.novelty)}</p>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-slate-800">
+                <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${selectedCandidate.novelty * 100}%` }} />
+              </div>
+            </div>
+            <div className="rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Developability</h4>
+              <p className="mt-1 text-lg font-bold text-blue-300">{formatPercent(selectedCandidate.developability)}</p>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-slate-800">
+                <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${selectedCandidate.developability * 100}%` }} />
+              </div>
+            </div>
+            <div className="rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Affinity</h4>
+              <p className="mt-1 text-lg font-bold text-purple-300">{formatPercent(selectedCandidate.affinity)}</p>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-slate-800">
+                <div className="h-1.5 rounded-full bg-purple-500" style={{ width: `${selectedCandidate.affinity * 100}%` }} />
+              </div>
+            </div>
+            <div className="col-span-full rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Sequence</h4>
+              <p className="mt-1 font-mono text-xs text-cyan-100 break-all">{selectedCandidate.sequence}</p>
+            </div>
+            <div className="col-span-full rounded-lg border bg-slate-950/50 p-4">
+              <h4 className="text-xs text-muted-foreground">Ranking Rationale</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-300">{selectedCandidate.explanation}</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>AI Explanation</CardTitle>
@@ -696,18 +858,99 @@ function DockingPage({ snapshot }: { snapshot?: Snapshot }) {
 }
 
 function AiScientistPage() {
+  const [messages, setMessages] = useState<Array<{ role: "user" | "scientist"; text: string; citations?: string[] }>>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const send = useCallback(async (text?: string) => {
+    const msg = (text ?? input).trim();
+    if (!msg || loading) return;
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", text: msg }]);
+    setLoading(true);
+    try {
+      const res = await chatWithAiScientist(msg);
+      setMessages((prev) => [...prev, { role: "scientist", text: res.response, citations: res.citations }]);
+    } catch {
+      setMessages((prev) => [...prev, { role: "scientist", text: "Error: failed to reach AI Scientist backend." }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [input, loading]);
+
+  const quickActions = [
+    "Analyze resistance mutations for EGFR",
+    "What wet-lab assays should I run next?",
+    "Explain the docking interactions",
+    "Summarize findings for a report",
+    "Compare candidates by confidence",
+    "What are the risks of this binder?",
+  ];
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>AI Scientist Workspace</CardTitle>
-        <CardDescription>Ask scientific questions, interpret docking, compare candidates, cite sources, and generate reports.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-3">
-        {["Analyze resistance mutations", "Suggest next wet-lab assays", "Generate publication-style report"].map((item) => (
-          <button key={item} className="rounded-lg border bg-slate-950/50 p-4 text-left text-sm font-medium text-white transition hover:border-cyan-300/60">{item}</button>
-        ))}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Scientist Workspace</CardTitle>
+          <CardDescription>Ask scientific questions, interpret docking results, compare candidates, and get experiment recommendations.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            {quickActions.map((action) => (
+              <button
+                key={action}
+                onClick={() => send(action)}
+                disabled={loading}
+                className="rounded-lg border bg-slate-950/50 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-cyan-300/60 hover:text-white disabled:opacity-50"
+              >
+                {action}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="flex-1">
+        <CardContent className="flex flex-col gap-3 py-4">
+          {messages.length === 0 && !loading && (
+            <p className="py-8 text-center text-sm text-muted-foreground">Ask a question or use a quick action above to start.</p>
+          )}
+          <div className="flex max-h-[40rem] flex-col gap-3 overflow-y-auto">
+            {messages.map((msg, i) => (
+              <div key={i} className={`rounded-lg border p-3 text-sm ${msg.role === "user" ? "ml-auto max-w-[80%] border-cyan-500/30 bg-cyan-950/20 text-cyan-100" : "mr-auto max-w-[80%] border-slate-700 bg-slate-950/60 text-slate-200"}`}>
+                <p className="whitespace-pre-wrap leading-6">{msg.text}</p>
+                {msg.citations && msg.citations.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {msg.citations.map((c) => (
+                      <span key={c} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{c}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {loading && (
+              <div className="mr-auto max-w-[80%] rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-400">
+                <span className="animate-pulse">Thinking...</span>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 pt-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+              placeholder="Ask about targets, mutations, assays, docking..."
+              disabled={loading}
+              className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+            />
+            <Button onClick={() => send()} disabled={loading || !input.trim()}>
+              Send
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -877,9 +1120,130 @@ function ReportsPage({ snapshot }: { snapshot?: Snapshot }) {
                 <CardDescription>Export report data in various formats</CardDescription>
               </div>
               <div className="flex gap-2">
-                <Button variant="secondary"><FileText /> Markdown</Button>
-                <Button variant="secondary"><Download /> Word</Button>
-                <Button variant="primary"><Download /> PDF</Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!reportData) return;
+                    const sections = reportData.report_sections as Record<string, string>;
+                    const exp = reportData.experiment as Record<string, unknown>;
+                    const md = [
+                      `# Research Report — ${(exp.experiment_id as string)?.slice(0, 8) ?? "N/A"}`,
+                      "",
+                      `**Experiment:** ${exp.experiment_id}`,
+                      `**Project:** ${exp.project_id}`,
+                      `**Workflow:** ${exp.workflow_name}`,
+                      `**Status:** ${exp.status}`,
+                      `**Random Seed:** ${exp.random_seed}`,
+                      "",
+                      "---",
+                      "",
+                      "## Executive Summary",
+                      sections?.executive_summary ?? "N/A",
+                      "",
+                      "## Methods",
+                      sections?.methods ?? "N/A",
+                      "",
+                      "## Results",
+                      sections?.results ?? "N/A",
+                      "",
+                      "## Risk Analysis",
+                      sections?.risk_analysis ?? "N/A",
+                      "",
+                      "---",
+                      "*Generated by OpenBioDesign platform*",
+                    ].join("\n");
+                    const blob = new Blob([md], { type: "text/markdown" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `report-${(exp.experiment_id as string)?.slice(0, 8) ?? "export"}.md`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <FileText /> Markdown
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!reportData) return;
+                    const sections = reportData.report_sections as Record<string, string>;
+                    const exp = reportData.experiment as Record<string, unknown>;
+                    const html = [
+                      "<html><head><title>OpenBioDesign Report</title>",
+                      "<style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#222}",
+                      "h1{border-bottom:2px solid #22d3ee;padding-bottom:8px}h2{color:#0891b2}",
+                      ".meta{color:#666;font-size:0.9em}.section{margin:24px 0;padding:16px;border:1px solid #e5e7eb;border-radius:8px}",
+                      "</style></head><body>",
+                      `<h1>Research Report — ${(exp.experiment_id as string)?.slice(0, 8) ?? "N/A"}</h1>`,
+                      `<p class="meta"><b>Experiment:</b> ${exp.experiment_id}<br>`,
+                      `<b>Project:</b> ${exp.project_id}<br>`,
+                      `<b>Workflow:</b> ${exp.workflow_name}<br>`,
+                      `<b>Status:</b> ${exp.status}<br>`,
+                      `<b>Random Seed:</b> ${exp.random_seed}</p>`,
+                      `<div class="section"><h2>Executive Summary</h2><p>${sections?.executive_summary ?? "N/A"}</p></div>`,
+                      `<div class="section"><h2>Methods</h2><p>${sections?.methods ?? "N/A"}</p></div>`,
+                      `<div class="section"><h2>Results</h2><p>${sections?.results ?? "N/A"}</p></div>`,
+                      `<div class="section"><h2>Risk Analysis</h2><p>${sections?.risk_analysis ?? "N/A"}</p></div>`,
+                      "<p style='color:#999;margin-top:40px;font-size:0.8em'>Generated by OpenBioDesign platform</p>",
+                      "</body></html>",
+                    ].join("\n");
+                    const blob = new Blob([html], { type: "text/html" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `report-${(exp.experiment_id as string)?.slice(0, 8) ?? "export"}.html`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <Download /> Word
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (!reportData) return;
+                    const sections = reportData.report_sections as Record<string, string>;
+                    const exp = reportData.experiment as Record<string, unknown>;
+                    const txt = [
+                      "OPENBIODESIGN RESEARCH REPORT",
+                      "=".repeat(50),
+                      "",
+                      `Experiment ID: ${exp.experiment_id}`,
+                      `Project: ${exp.project_id}`,
+                      `Workflow: ${exp.workflow_name}`,
+                      `Status: ${exp.status}`,
+                      `Random Seed: ${exp.random_seed}`,
+                      "",
+                      "EXECUTIVE SUMMARY",
+                      "-".repeat(30),
+                      sections?.executive_summary ?? "N/A",
+                      "",
+                      "METHODS",
+                      "-".repeat(30),
+                      sections?.methods ?? "N/A",
+                      "",
+                      "RESULTS",
+                      "-".repeat(30),
+                      sections?.results ?? "N/A",
+                      "",
+                      "RISK ANALYSIS",
+                      "-".repeat(30),
+                      sections?.risk_analysis ?? "N/A",
+                      "",
+                      "=".repeat(50),
+                      "Generated by OpenBioDesign platform",
+                    ].join("\n");
+                    const blob = new Blob([txt], { type: "text/plain" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `report-${(exp.experiment_id as string)?.slice(0, 8) ?? "export"}.txt`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <Download /> PDF
+                </Button>
               </div>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-3">
@@ -911,18 +1275,69 @@ function ReportsPage({ snapshot }: { snapshot?: Snapshot }) {
 }
 
 function SettingsPage() {
+  const [health, setHealth] = useState<string>("checking...");
+  const [stats, setStats] = useState<Record<string, number> | null>(null);
+  const apiBase = (typeof window !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) || "http://127.0.0.1:8000/api/v1";
+
+  useEffect(() => {
+    fetch(`${apiBase}/health`, { headers: { Authorization: "Bearer dev-scientist-key" } })
+      .then((r) => r.json())
+      .then((d) => setHealth(d.status === "ok" ? "Connected" : "Error"))
+      .catch(() => setHealth("Unreachable"));
+    fetch(`${apiBase}/stats`, { headers: { Authorization: "Bearer dev-scientist-key" } })
+      .then((r) => r.json())
+      .then(setStats)
+      .catch(() => {});
+  }, [apiBase]);
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Platform Settings</CardTitle>
-        <CardDescription>Security, integrations, notifications, data governance, and deployment controls</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-2">
-        {["RBAC roles and project permissions", "OAuth2 / OIDC identity provider", "API keys and audit logs", "Object storage retention policies", "Prometheus and Grafana telemetry", "GPU queue and model adapter limits"].map((item) => (
-          <div key={item} className="rounded-lg border bg-slate-950/50 p-4 text-sm text-slate-200">{item}</div>
-        ))}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Platform Settings</CardTitle>
+          <CardDescription>System configuration, API health, and model status</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border bg-slate-950/50 p-4">
+            <h3 className="text-sm font-semibold text-white">API Health</h3>
+            <Badge tone={health === "Connected" ? "emerald" : "blue"}>{health}</Badge>
+            <p className="mt-2 text-xs text-muted-foreground">{apiBase}</p>
+          </div>
+          <div className="rounded-lg border bg-slate-950/50 p-4">
+            <h3 className="text-sm font-semibold text-white">Platform Stats</h3>
+            {stats ? (
+              <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-slate-300">
+                <span>Projects: {stats.total_projects}</span>
+                <span>Experiments: {stats.total_experiments}</span>
+                <span>Candidates: {stats.total_candidates}</span>
+                <span>Artifacts: {stats.total_artifacts}</span>
+                <span>Audit Events: {stats.total_audit_events}</span>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">Loading...</p>
+            )}
+          </div>
+          <div className="rounded-lg border bg-slate-950/50 p-4">
+            <h3 className="text-sm font-semibold text-white">ML Models</h3>
+            <ul className="mt-2 space-y-1 text-xs text-slate-300">
+              <li>ESM2-650M — Binding site detection &amp; scoring</li>
+              <li>ESMFold — Single-sequence structure prediction</li>
+              <li>E5 / BGE — Text embeddings (planned)</li>
+              <li>Qwen3 / Llama 3 — Scientific reasoning (planned)</li>
+            </ul>
+          </div>
+          <div className="rounded-lg border bg-slate-950/50 p-4">
+            <h3 className="text-sm font-semibold text-white">Security</h3>
+            <ul className="mt-2 space-y-1 text-xs text-slate-300">
+              <li>RBAC — role-based access control</li>
+              <li>API keys — dev-scientist-key, dev-admin-key, dev-viewer-key</li>
+              <li>Audit logging — immutable experiment records</li>
+              <li>CORS — allow all origins (dev mode)</li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

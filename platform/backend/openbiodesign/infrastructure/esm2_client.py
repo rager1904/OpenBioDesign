@@ -108,6 +108,20 @@ class ESM2Client:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForMaskedLM.from_pretrained(model_name)
+
+        # Ensure mask_token_id is set (AutoTokenizer may leave it as None)
+        if getattr(self.tokenizer, "mask_token_id", None) is None:
+            mask_id = self.tokenizer.convert_tokens_to_ids("<mask>")
+            if mask_id != self.tokenizer.unk_token_id:
+                self.tokenizer.mask_token_id = mask_id
+            else:
+                # Fallback: search vocabulary for any token containing "mask"
+                vocab = self.tokenizer.get_vocab()
+                for tok, tid in vocab.items():
+                    if "mask" in tok.lower():
+                        self.tokenizer.mask_token_id = tid
+                        break
+
         self.model.to(self.device)
         self.model.eval()
         self._model_loaded = True
@@ -312,7 +326,7 @@ class ESM2Client:
         """
         self._ensure_loaded()
 
-        # Create masked sequence
+        # Create masked sequence by replacing one AA with <mask>
         seq_list = list(sequence)
         seq_list[mask_position] = "<mask>"
         masked_seq = "".join(seq_list)
@@ -323,10 +337,27 @@ class ESM2Client:
         # Find the position of the mask token in the output
         input_ids = tokens["input_ids"][0]
         mask_token_id = self.tokenizer.mask_token_id
+
+        if mask_token_id is None:
+            # Fallback: try to find <mask> in the vocabulary
+            mask_token_id = self.tokenizer.convert_tokens_to_ids("<mask>")
+
+        if mask_token_id is None or mask_token_id == getattr(self.tokenizer, "unk_token_id", -1):
+            raise ValueError(
+                "Cannot find <mask> token in vocabulary. "
+                f"mask_token_id={self.tokenizer.mask_token_id}, "
+                f"vocab_size={self.tokenizer.vocab_size}"
+            )
+
         mask_positions = (input_ids == mask_token_id).nonzero(as_tuple=True)[0]
 
         if len(mask_positions) == 0:
-            raise ValueError("No mask token found in input")
+            # Debug: show what tokens were produced
+            decoded = [self.tokenizer.decode([tid.item()]) for tid in input_ids]
+            raise ValueError(
+                f"No mask token found in input. mask_token_id={mask_token_id}, "
+                f"tokens={decoded[:10]}..."
+            )
 
         mask_logits = logits[mask_positions[0]]
         probs = torch.softmax(mask_logits, dim=-1)
